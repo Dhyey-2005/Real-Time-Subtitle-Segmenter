@@ -1,0 +1,8 @@
+nltk>=3.8.1
+python-dotenv>=1.0.0
+google-genai>=1.0.0
+pytest>=8.0.0
+streamlit>=1.30.0
+faster-whisper>=1.0.0
+av>=11.0.0
+sounddevice>=0.5.0
