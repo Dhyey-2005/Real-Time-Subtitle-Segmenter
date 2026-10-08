@@ -1,0 +1,291 @@
+{
+  "benchmark_metadata": {
+    "timestamp": "2026-10-07T22:28:26.691659",
+    "environment": {
+      "python_version": "3.12.2",
+      "os": "Windows 11",
+      "architecture": "AMD64",
+      "processor": "Intel64 Family 6 Model 191 Stepping 2, GenuineIntel",
+      "faster_whisper_version": "1.2.1",
+      "compute_device": "CPU",
+      "compute_quantization": "INT8",
+      "model_size": "tiny",
+      "model_storage": "F:\\Real-Time Subtitle Segmenter\\models"
+    },
+    "dataset_files_count": 4
+  },
+  "aggregate_metrics": {
+    "mean_wer": 0.0317,
+    "mean_cer": 0.0183,
+    "mean_rtf": 0.077,
+    "total_evaluated_duration_seconds": 42.79,
+    "average_audio_duration_seconds": 14.26,
+    "average_processing_time_seconds": 1.16,
+    "diarization_accuracy_multi_speaker": 0.4725,
+    "der_multi_speaker": 0.5275,
+    "subtitle_boundary_accuracy": 0.5834,
+    "subtitle_avg_error_sec": 0.0668,
+    "phrase_precision_mean": 0.5555,
+    "phrase_recall_mean": 1.0,
+    "phrase_f1_mean": 0.6667
+  },
+  "benchmarks": {
+    "single_speaker": {
+      "audio_file": "single_speaker.wav",
+      "duration_seconds": 15.12,
+      "file_size_bytes": 666678,
+      "sample_rate": 22050,
+      "channels": 1,
+      "diarization_enabled": false,
+      "performance": {
+        "decoding_time_seconds": 0.0731,
+        "cold_run": {
+          "total_time_seconds": 4.25,
+          "rtf": 0.2812
+        },
+        "warm_runs": {
+          "repetitions": 3,
+          "min_seconds": 1.097,
+          "max_seconds": 1.189,
+          "mean_seconds": 1.139,
+          "mean_rtf": 0.0753,
+          "asr_total_ms": 1157.59,
+          "diarization_time_seconds": 0.0
+        }
+      },
+      "asr_accuracy": {
+        "reference_text": "Today we are discussing the new economic package and renewable energy transition. The government announced several new initiatives for job creation and public transit expansion. Renewable energy transition represents a major commitment.",
+        "hypothesis_text": "today we are discussing the new economic package and renewable energy transition the government announced several new initiatives for job creation and public transit expense renewable energy transition represents a major commitment",
+        "wer": 0.0312,
+        "cer": 0.0198,
+        "substitutions": 1,
+        "deletions": 0,
+        "insertions": 0,
+        "ref_words": 32,
+        "hyp_words": 32
+      },
+      "diarization_accuracy": null,
+      "subtitle_boundaries": {
+        "reference_boundaries_count": 3,
+        "predicted_boundaries_count": 5,
+        "boundary_accuracy": 0.6667,
+        "average_boundary_error_sec": 0.002,
+        "speaker_change_boundary_accuracy": 1.0
+      },
+      "phrase_extraction": {
+        "expected_phrases": [
+          "renewable energy transition"
+        ],
+        "predicted_phrases": [
+          "renewable energy transition",
+          "energy transition",
+          "renewable energy"
+        ],
+        "precision": 0.3333,
+        "recall": 1.0,
+        "f1": 0.5,
+        "found": [
+          "renewable energy transition"
+        ],
+        "missed": []
+      }
+    },
+    "multi_speaker_diar_on": {
+      "audio_file": "multi_speaker.wav",
+      "duration_seconds": 21.86,
+      "file_size_bytes": 964218,
+      "sample_rate": 22050,
+      "channels": 1,
+      "diarization_enabled": true,
+      "performance": {
+        "decoding_time_seconds": 0.0243,
+        "cold_run": {
+          "total_time_seconds": 2.238,
+          "rtf": 0.1024
+        },
+        "warm_runs": {
+          "repetitions": 3,
+          "min_seconds": 1.825,
+          "max_seconds": 2.173,
+          "mean_seconds": 1.968,
+          "mean_rtf": 0.09,
+          "asr_total_ms": 2113.73,
+          "diarization_time_seconds": 0.0125
+        }
+      },
+      "asr_accuracy": {
+        "reference_text": "Today we are discussing artificial intelligence and the renewable energy transition. Renewable energy transition is indeed a major topic for global climate policy. We must invest heavily into clean energy infrastructure and job creation initiatives. I completely agree that clean energy infrastructure drives long term economic growth.",
+        "hypothesis_text": "today we are discussing artificial intelligence and the renewable energy transition renewable energy transition is indeed a major topic for global climate policy we must invest heavily into clean energy infrastructure and job creation in this i completely agree that clean energy infrastructure drives long-term from economic growth",
+        "wer": 0.0638,
+        "cer": 0.0351,
+        "substitutions": 1,
+        "deletions": 0,
+        "insertions": 2,
+        "ref_words": 47,
+        "hyp_words": 49
+      },
+      "diarization_accuracy": {
+        "speaker_accuracy": 0.4725,
+        "der": 0.5275,
+        "best_mapping": {
+          "Speaker 2": "Speaker 1",
+          "Speaker 1": "Speaker 2"
+        },
+        "total_evaluated_duration_sec": 21.8
+      },
+      "subtitle_boundaries": {
+        "reference_boundaries_count": 4,
+        "predicted_boundaries_count": 7,
+        "boundary_accuracy": 0.5,
+        "average_boundary_error_sec": 0.1315,
+        "speaker_change_boundary_accuracy": 1.0
+      },
+      "phrase_extraction": {
+        "expected_phrases": [
+          "renewable energy transition",
+          "clean energy infrastructure"
+        ],
+        "predicted_phrases": [
+          "clean energy infrastructure",
+          "renewable energy transition",
+          "clean energy",
+          "energy infrastructure",
+          "energy transition",
+          "renewable energy"
+        ],
+        "precision": 0.3333,
+        "recall": 1.0,
+        "f1": 0.5,
+        "found": [
+          "clean energy infrastructure",
+          "renewable energy transition"
+        ],
+        "missed": []
+      }
+    },
+    "multi_speaker_diar_off": {
+      "audio_file": "multi_speaker.wav",
+      "duration_seconds": 21.86,
+      "file_size_bytes": 964218,
+      "sample_rate": 22050,
+      "channels": 1,
+      "diarization_enabled": false,
+      "performance": {
+        "decoding_time_seconds": 0.0234,
+        "cold_run": {
+          "total_time_seconds": 2.193,
+          "rtf": 0.1003
+        },
+        "warm_runs": {
+          "repetitions": 3,
+          "min_seconds": 1.821,
+          "max_seconds": 1.98,
+          "mean_seconds": 1.891,
+          "mean_rtf": 0.0865,
+          "asr_total_ms": 1778.54,
+          "diarization_time_seconds": 0.0
+        }
+      },
+      "asr_accuracy": {
+        "reference_text": "Today we are discussing artificial intelligence and the renewable energy transition. Renewable energy transition is indeed a major topic for global climate policy. We must invest heavily into clean energy infrastructure and job creation initiatives. I completely agree that clean energy infrastructure drives long term economic growth.",
+        "hypothesis_text": "today we are discussing artificial intelligence and the renewable energy transition renewable energy transition is indeed a major topic for global climate policy we must invest heavily into clean energy infrastructure and job creation in this i completely agree that clean energy infrastructure drives long-term from economic growth",
+        "wer": 0.0638,
+        "cer": 0.0351,
+        "substitutions": 1,
+        "deletions": 0,
+        "insertions": 2,
+        "ref_words": 47,
+        "hyp_words": 49
+      },
+      "diarization_accuracy": null,
+      "subtitle_boundaries": {
+        "reference_boundaries_count": 4,
+        "predicted_boundaries_count": 6,
+        "boundary_accuracy": 0.5,
+        "average_boundary_error_sec": 0.1315,
+        "speaker_change_boundary_accuracy": 1.0
+      },
+      "phrase_extraction": {
+        "expected_phrases": [
+          "renewable energy transition",
+          "clean energy infrastructure"
+        ],
+        "predicted_phrases": [
+          "clean energy infrastructure",
+          "renewable energy transition",
+          "clean energy",
+          "energy infrastructure",
+          "energy transition",
+          "renewable energy"
+        ],
+        "precision": 0.3333,
+        "recall": 1.0,
+        "f1": 0.5,
+        "found": [
+          "clean energy infrastructure",
+          "renewable energy transition"
+        ],
+        "missed": []
+      }
+    },
+    "short_speech": {
+      "audio_file": "short_speech.wav",
+      "duration_seconds": 5.81,
+      "file_size_bytes": 256182,
+      "sample_rate": 22050,
+      "channels": 1,
+      "diarization_enabled": false,
+      "performance": {
+        "decoding_time_seconds": 0.0214,
+        "cold_run": {
+          "total_time_seconds": 0.396,
+          "rtf": 0.0681
+        },
+        "warm_runs": {
+          "repetitions": 3,
+          "min_seconds": 0.375,
+          "max_seconds": 0.395,
+          "mean_seconds": 0.382,
+          "mean_rtf": 0.0658,
+          "asr_total_ms": 356.68,
+          "diarization_time_seconds": 0.0
+        }
+      },
+      "asr_accuracy": {
+        "reference_text": "Artificial intelligence infrastructure requires significant renewable energy investments.",
+        "hypothesis_text": "artificial intelligence infrastructure requires significant renewable energy investments",
+        "wer": 0.0,
+        "cer": 0.0,
+        "substitutions": 0,
+        "deletions": 0,
+        "insertions": 0,
+        "ref_words": 8,
+        "hyp_words": 8
+      },
+      "diarization_accuracy": null,
+      "subtitle_boundaries": {
+        "reference_boundaries_count": 0,
+        "predicted_boundaries_count": 2,
+        "boundary_accuracy": 0.0,
+        "average_boundary_error_sec": 0.0,
+        "speaker_change_boundary_accuracy": 1.0
+      },
+      "phrase_extraction": {
+        "expected_phrases": [],
+        "predicted_phrases": [],
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "found": [],
+        "missed": []
+      }
+    }
+  },
+  "robustness": {
+    "empty_audio": "PASS (Clean AudioLoadError)",
+    "corrupted_audio": "PASS (Handled gracefully)",
+    "silence_audio": "PASS (0 segments emitted, no crashes)",
+    "very_short_audio": "PASS (Processed 1 chunk successfully)",
+    "unsupported_format": "PASS (Rejected cleanly)"
+  }
+}
