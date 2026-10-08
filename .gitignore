@@ -1,0 +1,31 @@
+# Environment and secrets
+.env
+*.env.local
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Local data caches and outputs
+nltk_data/
+models/
+.cache/
+data/output/*
+!data/output/.gitkeep
+scratch_tmp/
+
+# IDE and OS files
+.vscode/
+.idea/
+.agents/
+.claude/
+Thumbs.db
+Desktop.ini
