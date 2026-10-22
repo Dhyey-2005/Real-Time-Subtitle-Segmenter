@@ -17,6 +17,7 @@ import sys
 import time
 import json
 import re
+import base64
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -187,6 +188,8 @@ if "audio_error" not in st.session_state:
     st.session_state.audio_error = None
 if "audio_processing_stage" not in st.session_state:
     st.session_state.audio_processing_stage = "Ready"
+if "audio_autoplay" not in st.session_state:
+    st.session_state.audio_autoplay = False
 
 # Live Microphone states
 if "mic_session" not in st.session_state:
@@ -248,6 +251,10 @@ def init_audio_session():
                 st.session_state.uploaded_audio_bytes,
                 filename=st.session_state.uploaded_audio_name or "audio.wav",
             )
+        if "Preloaded" in st.session_state.audio_source_type and sess.total_chunks > 0:
+            while sess.current_chunk_idx < sess.total_chunks:
+                sess.step()
+            sess.status = "COMPLETED"
         st.session_state.audio_processing_stage = "Ready"
     except AudioLoadError as e:
         st.session_state.audio_error = str(e)
@@ -259,6 +266,103 @@ def init_audio_session():
         st.session_state.audio_processing_stage = "Error"
 
     st.session_state.audio_session = sess
+
+
+def get_current_audio_data_uri() -> str:
+    """Return base64 data URI for the currently selected audio source."""
+    try:
+        if st.session_state.audio_source_type == "Preloaded Speech Sample (15.1s WAV)" and os.path.exists(SAMPLE_SPEECH_PATH):
+            with open(SAMPLE_SPEECH_PATH, "rb") as f:
+                raw_bytes = f.read()
+            b64 = base64.b64encode(raw_bytes).decode("ascii")
+            return f"data:audio/wav;base64,{b64}"
+        elif st.session_state.audio_source_type == "Preloaded Multi-Speaker Sample (21.9s WAV)" and os.path.exists(SAMPLE_MULTI_SPEAKER_PATH):
+            with open(SAMPLE_MULTI_SPEAKER_PATH, "rb") as f:
+                raw_bytes = f.read()
+            b64 = base64.b64encode(raw_bytes).decode("ascii")
+            return f"data:audio/wav;base64,{b64}"
+        elif st.session_state.uploaded_audio_bytes is not None:
+            ext = "wav"
+            if st.session_state.uploaded_audio_name:
+                parts = st.session_state.uploaded_audio_name.split(".")
+                if len(parts) > 1:
+                    raw_ext = parts[-1].lower()
+                    if raw_ext in ("wav", "mp3", "m4a"):
+                        ext = "mp4" if raw_ext == "m4a" else raw_ext
+            b64 = base64.b64encode(st.session_state.uploaded_audio_bytes).decode("ascii")
+            return f"data:audio/{ext};base64,{b64}"
+    except Exception:
+        pass
+    return ""
+
+
+def build_synced_segments_payload(emitted_segments: list, ranked_phrases: list, audio_duration: float = 0.0) -> list:
+    """
+    Format emitted subtitle segments into synchronized, non-overlapping intervals
+    with pre-rendered highlighted phrase HTML for browser playback sync.
+    """
+    if not emitted_segments:
+        return []
+
+    sorted_segs = sorted(emitted_segments, key=lambda s: (s.get("start_time", 0.0), s.get("end_time", 0.0)))
+    grouped = []
+    i = 0
+    while i < len(sorted_segs):
+        j = i + 1
+        st_i = sorted_segs[i].get("start_time", 0.0)
+        et_i = sorted_segs[i].get("end_time", 0.0)
+        group = [sorted_segs[i]]
+        while j < len(sorted_segs) and abs(sorted_segs[j].get("start_time", 0.0) - st_i) < 0.001 and abs(sorted_segs[j].get("end_time", 0.0) - et_i) < 0.001:
+            group.append(sorted_segs[j])
+            j += 1
+
+        if len(group) == 1:
+            grouped.append(group[0])
+        else:
+            total_words = sum(max(1, len(g.get("text", "").split())) for g in group)
+            dur = max(1.0, et_i - st_i)
+            cur_st = st_i
+            for g in group:
+                w = max(1, len(g.get("text", "").split()))
+                seg_dur = (w / total_words) * dur
+                c = dict(g)
+                c["start_time"] = round(cur_st, 2)
+                cur_st += seg_dur
+                c["end_time"] = round(cur_st, 2)
+                grouped.append(c)
+        i = j
+
+    for idx in range(len(grouped)):
+        if idx > 0 and grouped[idx]["start_time"] < grouped[idx - 1]["end_time"]:
+            grouped[idx]["start_time"] = grouped[idx - 1]["end_time"]
+        if grouped[idx]["end_time"] <= grouped[idx]["start_time"]:
+            grouped[idx]["end_time"] = round(grouped[idx]["start_time"] + 1.5, 2)
+
+    payload = []
+    for idx, seg in enumerate(grouped):
+        st_sec = float(seg.get("start_time", 0.0))
+        et_sec = float(seg.get("end_time", 0.0))
+        sm, ss = int(st_sec // 60), st_sec % 60
+        em, es = int(et_sec // 60), et_sec % 60
+        raw_text = seg.get("text", "")
+        hl_html = highlight_phrases_in_text(raw_text, ranked_phrases)
+
+        payload.append({
+            "idx": idx,
+            "seg_num": idx + 1,
+            "start_time": st_sec,
+            "end_time": et_sec,
+            "start_str": f"{sm:02d}:{ss:05.2f}",
+            "end_str": f"{em:02d}:{es:05.2f}",
+            "text": raw_text,
+            "html": hl_html,
+            "speaker": seg.get("speaker", "Speaker 1"),
+            "word_count": seg.get("word_count", len(raw_text.split())),
+            "char_count": seg.get("char_count", len(raw_text)),
+            "reason": seg.get("reason", "N/A"),
+        })
+
+    return payload
 
 
 def init_mic_session():
@@ -587,20 +691,14 @@ if "Mode A" in st.session_state.app_mode:
             """
         )
 
-        if st.session_state.audio_source_type == "Preloaded Speech Sample (15.1s WAV)" and os.path.exists(SAMPLE_SPEECH_PATH):
-            st.audio(SAMPLE_SPEECH_PATH, format="audio/wav")
-        elif st.session_state.audio_source_type == "Preloaded Multi-Speaker Sample (21.9s WAV)" and os.path.exists(SAMPLE_MULTI_SPEAKER_PATH):
-            st.audio(SAMPLE_MULTI_SPEAKER_PATH, format="audio/wav")
-        elif st.session_state.uploaded_audio_bytes is not None:
-            st.audio(st.session_state.uploaded_audio_bytes, format=f"audio/{meta.format.lower()}")
     else:
         st.warning("⚠️ No audio loaded. Please select a preloaded sample or upload an audio file (WAV, MP3, M4A).")
 
     # Control Action Buttons Bar
-    col_b1, col_b2, col_b3, col_b4, col_status = st.columns([1.2, 1, 1, 1, 2.8])
+    col_b1, col_b2, col_b3, col_b4, col_status = st.columns([1.5, 1, 1, 1, 2.5])
 
     with col_b1:
-        start_btn = st.button("▶️ Start ASR", type="primary", key="audio_start_btn")
+        start_btn = st.button("▶️ Start ASR & Play Synced", type="primary", key="audio_start_btn")
     with col_b2:
         pause_btn = st.button("⏸️ Pause", key="audio_pause_btn")
     with col_b3:
@@ -610,24 +708,37 @@ if "Mode A" in st.session_state.app_mode:
 
     if reset_btn:
         st.session_state.audio_is_running = False
+        st.session_state.audio_autoplay = False
         asess.reset()
         st.rerun()
 
     if pause_btn:
         st.session_state.audio_is_running = False
+        st.session_state.audio_autoplay = False
         asess.status = "PAUSED"
         st.rerun()
 
     if resume_btn:
-        if asess.status in ("PAUSED", "PROCESSING") and asess.current_chunk_idx < asess.total_chunks:
-            st.session_state.audio_is_running = True
+        if asess.status in ("PAUSED", "COMPLETED"):
+            st.session_state.audio_autoplay = True
         elif asess.status == "READY":
-            st.session_state.audio_is_running = True
+            if asess.total_chunks > 0:
+                with st.spinner("⚡ Transcribing audio chunks with local faster-whisper ASR..."):
+                    while asess.current_chunk_idx < asess.total_chunks:
+                        asess.step()
+                asess.status = "COMPLETED"
+                st.session_state.audio_autoplay = True
         st.rerun()
 
     if start_btn:
         asess.reset()
-        st.session_state.audio_is_running = True
+        if asess.total_chunks > 0:
+            with st.spinner("⚡ Transcribing audio chunks and extracting recurring key phrases with local Whisper ASR..."):
+                while asess.current_chunk_idx < asess.total_chunks:
+                    asess.step()
+            asess.status = "COMPLETED"
+        st.session_state.audio_is_running = False
+        st.session_state.audio_autoplay = True
         st.rerun()
 
     curr_status = asess.status
@@ -705,76 +816,302 @@ if "Mode A" in st.session_state.app_mode:
     with col_left:
         st.subheader("📺 Progressive Subtitle Feed")
 
-        # Active Latest Subtitle Card
-        latest_seg = asess.emitted_segments[-1] if asess.emitted_segments else None
-        if latest_seg:
-            seg_text = latest_seg.get("text", "")
-            hl_html = highlight_phrases_in_text(seg_text, ranked_phrases)
-            sm, ss = int(latest_seg.get("start_time", 0.0) // 60), latest_seg.get("start_time", 0.0) % 60
-            em, es = int(latest_seg.get("end_time", 0.0) // 60), latest_seg.get("end_time", 0.0) % 60
-            time_str = f"{sm:02d}:{ss:05.2f} → {em:02d}:{es:05.2f}"
+        audio_uri = get_current_audio_data_uri()
+        synced_payload = build_synced_segments_payload(
+            asess.emitted_segments,
+            ranked_phrases,
+            meta.duration_seconds if meta else 0.0,
+        )
+        payload_json = json.dumps(synced_payload)
+        autoplay_val = "true" if st.session_state.audio_autoplay else "false"
+        st.session_state.audio_autoplay = False
 
-            spk_badge = (
-                f"<span style='background: #9333ea; color: white; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; margin-right: 8px; font-weight: bold;'>● {latest_seg.get('speaker', 'Speaker 1').upper()}</span>"
-                if asess.enable_diarization
-                else ""
-            )
+        first_seg = synced_payload[0] if synced_payload else None
+        init_spk = first_seg.get("speaker", "Speaker 1") if first_seg and asess.enable_diarization else ""
+        init_time = f"{first_seg['start_str']} → {first_seg['end_str']}" if first_seg else "00:00.00 → 00:00.00"
+        init_html = first_seg["html"] if first_seg else (
+            "<span style='color: #94a3b8; font-style: italic;'>Subtitles will appear here in real-time sync with audio playback as chunks are transcribed. Click '▶️ Start ASR & Play Synced' above to begin.</span>"
+            if asess.status != "COMPLETED"
+            else "<span style='color: #94a3b8;'>ℹ️ No speech was detected in this audio.</span>"
+        )
+        init_wc = first_seg["word_count"] if first_seg else 0
+        init_cc = first_seg["char_count"] if first_seg else 0
+        init_reason = first_seg["reason"] if first_seg else "N/A"
+        spk_badge_initial = (
+            f"<span style='background: #9333ea; color: white; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; margin-right: 8px; font-weight: bold;'>● {init_spk.upper()}</span>"
+            if init_spk
+            else ""
+        )
 
-            render_html(
-                f"""
-                <div style="background: #0f172a; color: #ffffff; padding: 20px 24px; border-radius: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.2); margin-bottom: 16px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                        <div>
-                            {spk_badge}
-                            <span style="color: #38bdf8; font-weight: 700; font-size: 0.8rem; letter-spacing: 0.5px;">ACTIVE SUBTITLE FRAME</span>
-                        </div>
-                        <span style="color: #94a3b8; font-family: monospace; font-size: 0.85rem; background: #1e293b; padding: 2px 8px; border-radius: 4px;">{time_str}</span>
+        timeline_items_html_list = []
+        if synced_payload:
+            for item in synced_payload:
+                s_num = item["seg_num"]
+                s_start = item["start_time"]
+                s_range = f"{item['start_str']} → {item['end_str']}"
+                s_wc = item["word_count"]
+                s_spk = item["speaker"] if asess.enable_diarization else None
+                s_spk_span = f'<span style="font-weight: 700; color: #9333ea; font-size: 0.8rem;">● {s_spk}</span>' if s_spk else ""
+                card_html = f"""
+                <div class="sync-timeline-item" id="timeline-item-{item['idx']}" onclick="window.seekToSubtitle({s_start})" style="border-left: 4px solid #cbd5e1; padding: 10px 14px; margin-bottom: 10px; background: #ffffff; border-radius: 0 8px 8px 0; border: 1px solid #e2e8f0; border-left-width: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); cursor: pointer; transition: all 0.2s ease;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: #64748b; margin-bottom: 4px;">
+                        <span>
+                            <b>#{s_num}</b> &nbsp;
+                            <code style="color: #475569;">{s_range}</code> &nbsp;·&nbsp; {s_wc} words
+                            <span class="sync-active-indicator" style="display: none; background: #0284c7; color: white; padding: 1px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; margin-left: 8px;">▶ ACTIVE NOW</span>
+                        </span>
+                        {s_spk_span}
                     </div>
-                    <div style="font-size: 1.35rem; font-weight: 500; line-height: 1.6; color: #f8fafc; margin-bottom: 14px;">
-                        {hl_html}
-                    </div>
-                    <div style="display: flex; gap: 16px; font-size: 0.8rem; color: #94a3b8; border-top: 1px solid #1e293b; padding-top: 10px;">
-                        <span>Words: <b style="color: #f1f5f9;">{latest_seg.get('word_count', len(seg_text.split()))}</b></span>
-                        <span>Chars: <b style="color: #f1f5f9;">{latest_seg.get('char_count', len(seg_text))}</b></span>
-                        <span>Boundary Trigger: <b style="color: #38bdf8;">{latest_seg.get('reason', 'N/A')}</b></span>
+                    <div style="font-size: 1rem; color: #0f172a; line-height: 1.55;">
+                        {item['html']}
                     </div>
                 </div>
                 """
-            )
+                timeline_items_html_list.append(card_html.strip())
+            timeline_items_html = "".join(timeline_items_html_list)
         elif asess.status == "COMPLETED":
-            st.info("ℹ️ No speech was detected in this audio.")
+            timeline_items_html = "<div style='color: #64748b; font-size: 0.9rem; padding: 12px; background: #f8fafc; border-radius: 6px; border: 1px dashed #cbd5e1;'>ℹ️ No speech segments detected in this audio file.</div>"
         else:
-            st.info("Subtitles will appear here progressively as audio chunks are transcribed.")
+            timeline_items_html = "<div style='color: #64748b; font-size: 0.9rem; padding: 12px; background: #f8fafc; border-radius: 6px; border: 1px dashed #cbd5e1;'>No finalized subtitles yet. Click '▶️ Start ASR & Play Synced' above to begin transcription.</div>"
 
-        # Subtitle History Timeline
-        with st.expander("📜 Subtitle History Timeline", expanded=True):
-            if asess.emitted_segments:
-                for idx, seg in enumerate(reversed(asess.emitted_segments), 1):
-                    seg_num = len(asess.emitted_segments) - idx + 1
-                    s_txt = seg.get("text", "")
-                    s_html = highlight_phrases_in_text(s_txt, ranked_phrases)
-                    st_sec, et_sec = seg.get("start_time", 0.0), seg.get("end_time", 0.0)
-                    sm, ss = int(st_sec // 60), st_sec % 60
-                    em, es = int(et_sec // 60), et_sec % 60
-                    spk_label = seg.get("speaker", "Speaker 1") if asess.enable_diarization else None
+        synced_ui_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding: 2px 2px 14px 2px;
+    background: transparent;
+    color: #0f172a;
+}}
+* {{
+    box-sizing: border-box;
+}}
+.sync-spd-btn:hover {{
+    filter: brightness(1.2);
+}}
+.sync-timeline-item:hover {{
+    box-shadow: 0 4px 12px rgba(2, 132, 199, 0.15) !important;
+    border-color: #38bdf8 !important;
+}}
+</style>
+</head>
+<body>
+<div style="background: #0f172a; color: #ffffff; border-radius: 12px; padding: 18px 22px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); margin-bottom: 16px; border: 1px solid #1e293b;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span id="sync-spk-badge">{spk_badge_initial}</span>
+            <span id="sync-status-indicator" style="color: #38bdf8; font-weight: 700; font-size: 0.8rem; letter-spacing: 0.5px;">● SYNCED AUDIO SUBTITLE FEED</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 0.75rem; color: #94a3b8; margin-right: 2px;">Speed:</span>
+            <button type="button" class="sync-spd-btn" onclick="window.setSyncSpeed(0.75, this)" style="background: #1e293b; color: #cbd5e1; border: 1px solid #334155; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; cursor: pointer;">0.75x</button>
+            <button type="button" class="sync-spd-btn" onclick="window.setSyncSpeed(1.0, this)" style="background: #0284c7; color: #ffffff; border: 1px solid #0284c7; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; cursor: pointer; font-weight: bold;">1.0x</button>
+            <button type="button" class="sync-spd-btn" onclick="window.setSyncSpeed(1.25, this)" style="background: #1e293b; color: #cbd5e1; border: 1px solid #334155; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; cursor: pointer;">1.25x</button>
+            <button type="button" class="sync-spd-btn" onclick="window.setSyncSpeed(1.5, this)" style="background: #1e293b; color: #cbd5e1; border: 1px solid #334155; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; cursor: pointer;">1.5x</button>
+            <button type="button" class="sync-spd-btn" onclick="window.setSyncSpeed(2.0, this)" style="background: #1e293b; color: #cbd5e1; border: 1px solid #334155; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; cursor: pointer;">2.0x</button>
+            <span id="sync-time-badge" style="color: #94a3b8; font-family: monospace; font-size: 0.85rem; background: #1e293b; padding: 2px 8px; border-radius: 4px; margin-left: 6px;">{init_time}</span>
+        </div>
+    </div>
 
-                    render_html(
-                        f"""
-                        <div style="border-left: 3px solid #3b82f6; padding: 10px 14px; margin-bottom: 10px; background: #ffffff; border-radius: 0 8px 8px 0; border: 1px solid #e2e8f0; border-left-width: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.02);">
-                            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: #64748b; margin-bottom: 4px;">
-                                <span><b>#{seg_num}</b> &nbsp; <code style="color: #475569;">{sm:02d}:{ss:05.2f} → {em:02d}:{es:05.2f}</code> &nbsp;·&nbsp; {seg.get('word_count', len(s_txt.split()))} words</span>
-                                {f'<span style="font-weight: 700; color: #9333ea; font-size: 0.8rem;">● {spk_label}</span>' if spk_label else ''}
-                            </div>
-                            <div style="font-size: 1rem; color: #0f172a; line-height: 1.55;">
-                                {s_html}
-                            </div>
-                        </div>
-                        """
-                    )
-            elif asess.status == "COMPLETED":
-                st.info("ℹ️ No speech was detected in this audio.")
-            else:
-                st.caption("No finalized subtitles yet.")
+    <audio id="synced-audio-player" src="{audio_uri}" controls preload="auto" style="width: 100%; height: 40px; border-radius: 8px; margin-bottom: 14px; outline: none;"></audio>
+
+    <div id="sync-subtitle-card" style="background: #1e293b; border-radius: 8px; padding: 16px 20px; border: 1px solid #334155; min-height: 80px; display: flex; align-items: center;">
+        <div id="sync-subtitle-text" style="font-size: 1.35rem; font-weight: 500; line-height: 1.6; color: #f8fafc; width: 100%;">
+            {init_html}
+        </div>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: #94a3b8; border-top: 1px solid #1e293b; padding-top: 10px; margin-top: 12px;">
+        <div style="display: flex; gap: 16px;">
+            <span>Words: <b id="sync-word-count" style="color: #f1f5f9;">{init_wc}</b></span>
+            <span>Chars: <b id="sync-char-count" style="color: #f1f5f9;">{init_cc}</b></span>
+            <span>Boundary Trigger: <b id="sync-reason" style="color: #38bdf8;">{init_reason}</b></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span id="sync-speed-label" style="color: #a78bfa; font-weight: 600; font-size: 0.75rem;">1.0x Speed</span>
+            <span id="sync-curtime-badge" style="color: #38bdf8; font-family: monospace; font-size: 0.8rem; background: #0c4a6e; padding: 2px 8px; border-radius: 4px;">▶ 00:00.0</span>
+        </div>
+    </div>
+</div>
+
+<div style="margin-top: 4px; margin-bottom: 16px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span style="font-weight: 600; font-size: 0.95rem; color: #0f172a;">📜 Subtitle History Timeline</span>
+        <span style="font-size: 0.75rem; color: #64748b; font-style: italic;">Click any card to jump audio playback</span>
+    </div>
+    <div id="sync-timeline-container" style="max-height: 480px; overflow-y: auto; padding-right: 4px;">
+        {timeline_items_html}
+    </div>
+</div>
+
+<script id="synced-data" type="application/json">
+{payload_json}
+</script>
+
+<script>
+(function() {{
+    const dataElem = document.getElementById("synced-data");
+    const segments = dataElem ? JSON.parse(dataElem.textContent) : [];
+    const shouldAutoplay = {autoplay_val};
+    const audio = document.getElementById("synced-audio-player");
+    if (!audio) return;
+
+    let lastActiveIdx = -1;
+
+    function renderActive(idx) {{
+        if (!segments || segments.length === 0 || idx < 0 || idx >= segments.length) return;
+        const seg = segments[idx];
+
+        const txtElem = document.getElementById("sync-subtitle-text");
+        if (txtElem) txtElem.innerHTML = seg.html;
+
+        const timeBadge = document.getElementById("sync-time-badge");
+        if (timeBadge) timeBadge.innerText = `${{seg.start_str}} → ${{seg.end_str}}`;
+
+        const wcElem = document.getElementById("sync-word-count");
+        if (wcElem) wcElem.innerText = seg.word_count;
+
+        const ccElem = document.getElementById("sync-char-count");
+        if (ccElem) ccElem.innerText = seg.char_count;
+
+        const reasonElem = document.getElementById("sync-reason");
+        if (reasonElem) reasonElem.innerText = seg.reason;
+
+        const spkElem = document.getElementById("sync-spk-badge");
+        if (spkElem) {{
+            spkElem.innerHTML = seg.speaker ? `<span style="background: #9333ea; color: white; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; margin-right: 8px; font-weight: bold;">● ${{seg.speaker.toUpperCase()}}</span>` : "";
+        }}
+
+        document.querySelectorAll(".sync-timeline-item").forEach((el, i) => {{
+            const badge = el.querySelector(".sync-active-indicator");
+            if (i === idx) {{
+                el.style.borderLeft = "5px solid #0284c7";
+                el.style.background = "#f0f9ff";
+                el.style.boxShadow = "0 0 10px rgba(2, 132, 199, 0.25)";
+                if (badge) badge.style.display = "inline-block";
+                el.scrollIntoView({{ behavior: "smooth", block: "nearest" }});
+            }} else {{
+                el.style.borderLeft = "4px solid #cbd5e1";
+                el.style.background = "#ffffff";
+                el.style.boxShadow = "none";
+                if (badge) badge.style.display = "none";
+            }}
+        }});
+    }}
+
+    function onAudioTick() {{
+        if (!audio) return;
+        const cur = audio.currentTime;
+
+        const m = Math.floor(cur / 60);
+        const s = (cur % 60).toFixed(1);
+        const curPill = document.getElementById("sync-curtime-badge");
+        if (curPill) {{
+            const mm = String(m).padStart(2, '0');
+            const ss = String(s).padStart(4, '0');
+            curPill.innerText = `▶ ${{mm}}:${{ss}}`;
+        }}
+
+        if (!segments || segments.length === 0) return;
+
+        let activeIdx = -1;
+        for (let i = 0; i < segments.length; i++) {{
+            const isLast = (i === segments.length - 1);
+            const nextStart = isLast ? Infinity : segments[i + 1].start_time;
+            if (cur >= segments[i].start_time && cur < nextStart) {{
+                activeIdx = i;
+                break;
+            }}
+        }}
+        if (activeIdx === -1 && segments.length > 0) {{
+            activeIdx = (cur < segments[0].start_time) ? 0 : segments.length - 1;
+        }}
+
+        if (activeIdx !== lastActiveIdx && activeIdx >= 0) {{
+            lastActiveIdx = activeIdx;
+            renderActive(activeIdx);
+        }}
+    }}
+
+    audio.addEventListener("timeupdate", onAudioTick);
+    audio.addEventListener("seeked", onAudioTick);
+
+    audio.addEventListener("play", function() {{
+        const ind = document.getElementById("sync-status-indicator");
+        if (ind) {{
+            ind.innerText = "● PLAYING (SYNCED)";
+            ind.style.color = "#10b981";
+        }}
+        onAudioTick();
+    }});
+
+    audio.addEventListener("pause", function() {{
+        const ind = document.getElementById("sync-status-indicator");
+        if (ind) {{
+            ind.innerText = "⏸️ PAUSED";
+            ind.style.color = "#f59e0b";
+        }}
+    }});
+
+    audio.addEventListener("ended", function() {{
+        const ind = document.getElementById("sync-status-indicator");
+        if (ind) {{
+            ind.innerText = "✓ PLAYBACK FINISHED";
+            ind.style.color = "#38bdf8";
+        }}
+    }});
+
+    audio.addEventListener("ratechange", function() {{
+        const spd = document.getElementById("sync-speed-label");
+        if (spd) spd.innerText = `${{audio.playbackRate}}x Speed`;
+    }});
+
+    window.seekToSubtitle = function(sec) {{
+        if (audio) {{
+            audio.currentTime = sec;
+            audio.play().catch(function(e) {{}});
+        }}
+    }};
+
+    window.setSyncSpeed = function(speed, btn) {{
+        if (audio) {{
+            audio.playbackRate = speed;
+            document.querySelectorAll(".sync-spd-btn").forEach(b => {{
+                b.style.background = "#1e293b";
+                b.style.color = "#cbd5e1";
+                b.style.borderColor = "#334155";
+                b.style.fontWeight = "normal";
+            }});
+            if (btn) {{
+                btn.style.background = "#0284c7";
+                btn.style.color = "#ffffff";
+                btn.style.borderColor = "#0284c7";
+                btn.style.fontWeight = "bold";
+            }}
+        }}
+    }};
+
+    if (shouldAutoplay) {{
+        audio.play().catch(function(err) {{
+            console.log("Autoplay notice:", err);
+        }});
+    }}
+
+    onAudioTick();
+}})();
+</script>
+</body>
+</html>
+"""
+
+        st.iframe(
+            synced_ui_html,
+            height=720,
+            alt="Synchronized Real-Time Subtitle and Audio Feed",
+        )
 
         # Dedicated Speaker Turns Table (Phase 8)
         if asess.enable_diarization and asess.emitted_segments:
@@ -945,6 +1282,7 @@ if "Mode A" in st.session_state.app_mode:
             st.session_state.audio_processing_stage = "Finalizing results..."
             st.session_state.audio_is_running = False
             asess.status = "COMPLETED"
+            st.session_state.audio_autoplay = True
             st.rerun()
 
 
