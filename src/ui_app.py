@@ -27,12 +27,21 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# Enforce project-local NLTK data directory
+# Enforce project-local NLTK data directory (strictly avoiding C: drive)
 NLTK_DATA_DIR = os.path.join(PROJECT_ROOT, "nltk_data")
-if os.path.exists(NLTK_DATA_DIR):
-    import nltk
-    if NLTK_DATA_DIR not in nltk.data.path:
-        nltk.data.path.insert(0, NLTK_DATA_DIR)
+os.makedirs(NLTK_DATA_DIR, exist_ok=True)
+import nltk
+if NLTK_DATA_DIR not in nltk.data.path:
+    nltk.data.path.insert(0, NLTK_DATA_DIR)
+
+for _res in ["punkt_tab", "averaged_perceptron_tagger_eng", "stopwords"]:
+    try:
+        nltk.data.find(_res)
+    except LookupError:
+        try:
+            nltk.download(_res, download_dir=NLTK_DATA_DIR, quiet=True)
+        except Exception:
+            pass
 
 from src.text_processor import load_text
 from src.streaming_segmenter import StreamingConfig
@@ -222,26 +231,23 @@ def init_text_session():
 def init_audio_session():
     st.session_state.audio_error = None
     st.session_state.audio_processing_stage = "Ready"
-    asr_inst = get_cached_asr(st.session_state.audio_model_size)
     num_spk = (
         st.session_state.audio_num_speakers
         if (st.session_state.audio_enable_diarization and st.session_state.audio_spk_mode == "Known number of speakers")
         else None
     )
+    # Fast non-blocking session init: ASR model will be loaded on demand when user starts transcription
     sess = AudioStreamingSession(
         chunk_duration_seconds=st.session_state.audio_chunk_sec,
         model_size=st.session_state.audio_model_size,
         min_frequency=st.session_state.min_freq_val,
         top_k=st.session_state.top_k_val,
-        asr_instance=asr_inst,
+        asr_instance=None,
         enable_diarization=st.session_state.audio_enable_diarization,
         num_speakers=num_spk,
     )
 
     try:
-        st.session_state.audio_processing_stage = (
-            "Running speaker diarization..." if st.session_state.audio_enable_diarization else "Preparing audio..."
-        )
         if st.session_state.audio_source_type == "Preloaded Speech Sample (15.1s WAV)" and os.path.exists(SAMPLE_SPEECH_PATH):
             sess.load_audio_source(SAMPLE_SPEECH_PATH, filename="sample_speech.wav")
         elif st.session_state.audio_source_type == "Preloaded Multi-Speaker Sample (21.9s WAV)" and os.path.exists(SAMPLE_MULTI_SPEAKER_PATH):
@@ -251,10 +257,6 @@ def init_audio_session():
                 st.session_state.uploaded_audio_bytes,
                 filename=st.session_state.uploaded_audio_name or "audio.wav",
             )
-        if "Preloaded" in st.session_state.audio_source_type and sess.total_chunks > 0:
-            while sess.current_chunk_idx < sess.total_chunks:
-                sess.step()
-            sess.status = "COMPLETED"
         st.session_state.audio_processing_stage = "Ready"
     except AudioLoadError as e:
         st.session_state.audio_error = str(e)
@@ -724,6 +726,7 @@ if "Mode A" in st.session_state.app_mode:
         elif asess.status == "READY":
             if asess.total_chunks > 0:
                 with st.spinner("⚡ Transcribing audio chunks with local faster-whisper ASR..."):
+                    asess.asr = get_cached_asr(st.session_state.audio_model_size)
                     while asess.current_chunk_idx < asess.total_chunks:
                         asess.step()
                 asess.status = "COMPLETED"
@@ -734,6 +737,7 @@ if "Mode A" in st.session_state.app_mode:
         asess.reset()
         if asess.total_chunks > 0:
             with st.spinner("⚡ Transcribing audio chunks and extracting recurring key phrases with local Whisper ASR..."):
+                asess.asr = get_cached_asr(st.session_state.audio_model_size)
                 while asess.current_chunk_idx < asess.total_chunks:
                     asess.step()
             asess.status = "COMPLETED"
@@ -1107,11 +1111,15 @@ body {{
 </html>
 """
 
-        st.iframe(
-            synced_ui_html,
-            height=720,
-            alt="Synchronized Real-Time Subtitle and Audio Feed",
-        )
+        try:
+            st.iframe(
+                synced_ui_html,
+                height=720,
+                alt="Synchronized Real-Time Subtitle and Audio Feed",
+            )
+        except (AttributeError, Exception):
+            import streamlit.components.v1 as components
+            components.html(synced_ui_html, height=720, scrolling=True)
 
         # Dedicated Speaker Turns Table (Phase 8)
         if asess.enable_diarization and asess.emitted_segments:
@@ -1275,6 +1283,8 @@ body {{
         if asess.current_chunk_idx < asess.total_chunks:
             chunk_num = asess.current_chunk_idx + 1
             st.session_state.audio_processing_stage = f"Running transcription (Chunk {chunk_num} of {asess.total_chunks})..."
+            if asess.asr._model is None:
+                asess.asr = get_cached_asr(st.session_state.audio_model_size)
             step_event = asess.step()
             st.session_state.audio_processing_stage = "Building subtitles & extracting phrases..."
             st.rerun()

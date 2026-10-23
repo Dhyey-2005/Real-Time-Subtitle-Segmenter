@@ -20,8 +20,9 @@ import numpy as np
 try:
     import sounddevice as sd
     SOUNDDEVICE_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception):
     sounddevice = None
+    sd = None
     SOUNDDEVICE_AVAILABLE = False
 
 from src.audio.chunker import AudioChunk
